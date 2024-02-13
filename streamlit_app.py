@@ -16,7 +16,7 @@ alt.themes.enable("dark")
 
 #######################
 # Load data
-df_reshaped = pd.read_csv('earthquake_country_continent_cleaned_data.csv')
+df_reshaped = pd.read_csv('earthquake_country_continent_cleaned_data.csv', encoding='utf-8')
 
 
 #######################
