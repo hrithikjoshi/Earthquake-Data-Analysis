@@ -1,220 +1,182 @@
-#######################
-# Import libraries
 import streamlit as st
+import plotly.express as px
 import pandas as pd
-import altair as alt
+import matplotlib.pyplot as plt
+import folium
+from folium.plugins import FastMarkerCluster, MarkerCluster
+from streamlit_folium import st_folium
+import os
+import warnings
+warnings.filterwarnings('ignore')
 
-#######################
-# Page configuration
-st.set_page_config(
-    page_title="Earthquake Data Dashboard",
-    layout="wide",
-    initial_sidebar_state="expanded")
+st.set_page_config(page_title="Earthquake Data Analysis", page_icon=":earth_asia:",layout="wide")
 
-alt.themes.enable("dark")
+st.title(" :earth_asia: Earthquake Data Analysis")
+st.markdown('<style>div.block-container{padding-top:1rem;}</style>',unsafe_allow_html=True)
+
+fl = st.file_uploader(":file_folder: Upload a file",type=(["csv","txt","xlsx","xls"]))
+if fl is not None:
+    filename = fl.name
+    st.write(filename)
+    df = pd.read_csv(filename, encoding = "ISO-8859-1")
+else:
+    df = pd.read_csv("earthquake_country_continent_cleaned_data.csv", encoding = "ISO-8859-1")
+
+col1, col2 = st.columns((2))
+df["date"] = pd.to_datetime(df["date"])
+
+# Getting the min and max date 
+startDate = pd.to_datetime(df["date"]).min()
+endDate = pd.to_datetime(df["date"]).max()
+
+with col1:
+    date1 = pd.to_datetime(st.date_input("Start Date", startDate))
+
+with col2:
+    date2 = pd.to_datetime(st.date_input("End Date", endDate))
+
+df = df[(df["date"] >= date1) & (df["date"] <= date2)].copy()
 
 
-#######################
-# Load data
-df_reshaped = pd.read_csv('earthquake_country_continent_cleaned_data.csv', encoding='utf-8')
+st.sidebar.header("Choose your filter: ")
+# Create for Region
+continent = st.sidebar.multiselect("Pick your continent", df["continent"].unique())
+if not continent:
+    df2 = df.copy()
+else:
+    df2 = df[df["continent"].isin(continent)]
+
+# Create for State
+country = st.sidebar.multiselect("Pick the country", df2["country"].unique())
+if not country:
+    df3 = df2.copy()
+else:
+    df3 = df2[df2["country"].isin(country)]
 
 
-#######################
-# Sidebar
-with st.sidebar:
-    st.title('Earthquake Data Dashboard')
+# Filter the data based on Continent and Country
+
+if not continent and not country:
+    filtered_df = df
+elif not country:
+    filtered_df = df[df["continent"].isin(continent)]
+elif not continent:
+    filtered_df = df[df["country"].isin(country)]
+elif country:
+    filtered_df = df3[df["country"].isin(country)]
+elif continent:
+    filtered_df = df3[df["continent"].isin(continent)]
+elif continent and country:
+    filtered_df = df3[df["continent"].isin(continent) & df3["country"].isin(country)]
+
+# Create group by continent charts
+continent_mag_df = filtered_df.groupby(by = ["continent"], as_index = False)['mag'].median()
+continent_depth_df = filtered_df.groupby(by = ["continent"], as_index = False)['depth'].median()
+
+
+with col1:
+    st.subheader("Continent-Wise Magnitude")
+    fig = px.bar(continent_mag_df, x = "continent", y = "mag", template = "seaborn")
+    st.plotly_chart(fig,use_container_width=True, height = 200)
+
+with col2:
+    st.subheader("Continent-Wise Depth")
+    fig = px.bar(continent_depth_df, x = "continent", y = "depth", template = "seaborn")
+    st.plotly_chart(fig,use_container_width=True, height = 200)
+
+# To download the grouped data
     
-    year_list = list(df_reshaped.year.unique())[::-1]
-    
-    selected_year = st.selectbox('Select a year', year_list)
-    df_selected_year = df_reshaped[df_reshaped.year == selected_year]
-    df_selected_year_sorted = df_selected_year.sort_values(by="magnitude", ascending=False)
+cl1, cl2 = st.columns((2))
+with cl1:
+    with st.expander("Magnitude_ViewData"):
+        st.write(continent_mag_df)
+        csv = continent_mag_df.to_csv(index = False).encode('utf-8')
+        st.download_button("Download Data", data = csv, file_name = "Magnitude.csv", mime = "text/csv",
+                            help = 'Click here to download the data as a CSV file')
 
-    color_theme_list = ['blues', 'cividis', 'greens', 'inferno', 'magma', 'plasma', 'reds', 'rainbow', 'turbo', 'viridis']
-    selected_color_theme = st.selectbox('Select a color theme', color_theme_list)
+with cl2:
+    with st.expander("Depth_ViewData"):
+        st.write(continent_depth_df)
+        csv = continent_depth_df.to_csv(index = False).encode('utf-8')
+        st.download_button("Download Data", data = csv, file_name = "Depth.csv", mime = "text/csv",
+                            help = 'Click here to download the data as a CSV file')
 
-"""
-#######################
-# Plots
-
-# Heatmap
-def make_heatmap(input_df, input_y, input_x, input_color, input_color_theme):
-    heatmap = alt.Chart(input_df).mark_rect().encode(
-            y=alt.Y(f'{input_y}:O', axis=alt.Axis(title="Year", titleFontSize=18, titlePadding=15, titleFontWeight=900, labelAngle=0)),
-            x=alt.X(f'{input_x}:O', axis=alt.Axis(title="", titleFontSize=18, titlePadding=15, titleFontWeight=900)),
-            color=alt.Color(f'max({input_color}):Q',
-                             legend=None,
-                             scale=alt.Scale(scheme=input_color_theme)),
-            stroke=alt.value('black'),
-            strokeWidth=alt.value(0.25),
-        ).properties(width=900
-        ).configure_axis(
-        labelFontSize=12,
-        titleFontSize=12
-        ) 
-    # height=300
-    return heatmap
-
-# Choropleth map
-def make_choropleth(input_df, input_id, input_column, input_color_theme):
-    choropleth = px.choropleth(input_df, locations=input_id, color=input_column, locationmode="USA-states",
-                               color_continuous_scale=input_color_theme,
-                               range_color=(0, max(df_selected_year.population)),
-                               scope="usa",
-                               labels={'population':'Population'}
-                              )
-    choropleth.update_layout(
-        template='plotly_dark',
-        plot_bgcolor='rgba(0, 0, 0, 0)',
-        paper_bgcolor='rgba(0, 0, 0, 0)',
-        margin=dict(l=0, r=0, t=0, b=0),
-        height=350
-    )
-    return choropleth
-
-
-# Donut chart
-def make_donut(input_response, input_text, input_color):
-  if input_color == 'blue':
-      chart_color = ['#29b5e8', '#155F7A']
-  if input_color == 'green':
-      chart_color = ['#27AE60', '#12783D']
-  if input_color == 'orange':
-      chart_color = ['#F39C12', '#875A12']
-  if input_color == 'red':
-      chart_color = ['#E74C3C', '#781F16']
-    
-  source = pd.DataFrame({
-      "Topic": ['', input_text],
-      "% value": [100-input_response, input_response]
-  })
-  source_bg = pd.DataFrame({
-      "Topic": ['', input_text],
-      "% value": [100, 0]
-  })
-    
-  plot = alt.Chart(source).mark_arc(innerRadius=45, cornerRadius=25).encode(
-      theta="% value",
-      color= alt.Color("Topic:N",
-                      scale=alt.Scale(
-                          #domain=['A', 'B'],
-                          domain=[input_text, ''],
-                          # range=['#29b5e8', '#155F7A']),  # 31333F
-                          range=chart_color),
-                      legend=None),
-  ).properties(width=130, height=130)
-    
-  text = plot.mark_text(align='center', color="#29b5e8", font="Lato", fontSize=32, fontWeight=700, fontStyle="italic").encode(text=alt.value(f'{input_response} %'))
-  plot_bg = alt.Chart(source_bg).mark_arc(innerRadius=45, cornerRadius=20).encode(
-      theta="% value",
-      color= alt.Color("Topic:N",
-                      scale=alt.Scale(
-                          # domain=['A', 'B'],
-                          domain=[input_text, ''],
-                          range=chart_color),  # 31333F
-                      legend=None),
-  ).properties(width=130, height=130)
-  return plot_bg + plot + text
-
-"""
-# Calculation year-over-year population migrations
-def calculate_population_difference(input_df, input_year):
-  selected_year_data = input_df[input_df['year'] == input_year].reset_index()
-  previous_year_data = input_df[input_df['year'] == input_year - 1].reset_index()
-  selected_year_data['population_difference'] = selected_year_data.population.sub(previous_year_data.population, fill_value=0)
-  return pd.concat([selected_year_data.states, selected_year_data.id, selected_year_data.population, selected_year_data.population_difference], axis=1).sort_values(by="population_difference", ascending=False)
-"""
-
-#######################
-# Dashboard Main Panel
-col = st.columns((1.5, 4.5, 2), gap='medium')
-
-with col[0]:
-    st.markdown('#### Gains/Losses')
-
-    df_population_difference_sorted = calculate_population_difference(df_reshaped, selected_year)
-
-    if selected_year > 2010:
-        first_state_name = df_population_difference_sorted.states.iloc[0]
-        first_state_population = format_number(df_population_difference_sorted.population.iloc[0])
-        first_state_delta = format_number(df_population_difference_sorted.population_difference.iloc[0])
-    else:
-        first_state_name = '-'
-        first_state_population = '-'
-        first_state_delta = ''
-    st.metric(label=first_state_name, value=first_state_population, delta=first_state_delta)
-
-    if selected_year > 2010:
-        last_state_name = df_population_difference_sorted.states.iloc[-1]
-        last_state_population = format_number(df_population_difference_sorted.population.iloc[-1])   
-        last_state_delta = format_number(df_population_difference_sorted.population_difference.iloc[-1])   
-    else:
-        last_state_name = '-'
-        last_state_population = '-'
-        last_state_delta = ''
-    st.metric(label=last_state_name, value=last_state_population, delta=last_state_delta)
-
-    
-    st.markdown('#### States Migration')
-
-    if selected_year > 2010:
-        # Filter states with population difference > 50000
-        # df_greater_50000 = df_population_difference_sorted[df_population_difference_sorted.population_difference_absolute > 50000]
-        df_greater_50000 = df_population_difference_sorted[df_population_difference_sorted.population_difference > 50000]
-        df_less_50000 = df_population_difference_sorted[df_population_difference_sorted.population_difference < -50000]
+# Create histogram for magnitude and depth
         
-        # % of States with population difference > 50000
-        states_migration_greater = round((len(df_greater_50000)/df_population_difference_sorted.states.nunique())*100)
-        states_migration_less = round((len(df_less_50000)/df_population_difference_sorted.states.nunique())*100)
-        donut_chart_greater = make_donut(states_migration_greater, 'Inbound Migration', 'green')
-        donut_chart_less = make_donut(states_migration_less, 'Outbound Migration', 'red')
-    else:
-        states_migration_greater = 0
-        states_migration_less = 0
-        donut_chart_greater = make_donut(states_migration_greater, 'Inbound Migration', 'green')
-        donut_chart_less = make_donut(states_migration_less, 'Outbound Migration', 'red')
+hist_cl1, hist_cl2 = st.columns((2))
 
-    migrations_col = st.columns((0.2, 1, 0.2))
-    with migrations_col[1]:
-        st.write('Inbound')
-        st.altair_chart(donut_chart_greater)
-        st.write('Outbound')
-        st.altair_chart(donut_chart_less)
+with hist_cl1:
+    st.subheader("Magnitude Histogram")
+    fig = px.histogram(filtered_df, x="mag", nbins=10, color_discrete_sequence=['indianred'])
+    fig.update_traces(marker_line_width=2,marker_line_color="white")
+    st.plotly_chart(fig,use_container_width=True, height = 200)
 
-with col[1]:
-    st.markdown('#### Total Population')
-    
-    choropleth = make_choropleth(df_selected_year, 'states_code', 'population', selected_color_theme)
-    st.plotly_chart(choropleth, use_container_width=True)
-    
-    heatmap = make_heatmap(df_reshaped, 'year', 'states', 'population', selected_color_theme)
-    st.altair_chart(heatmap, use_container_width=True)
-    
+with hist_cl2:
+    st.subheader("Depth Histogram")
+    fig = px.histogram(filtered_df, x="depth", nbins=10, color_discrete_sequence=['indianred'])
+    fig.update_traces(marker_line_width=2,marker_line_color="white")    
+    st.plotly_chart(fig,use_container_width=True, height = 200)
 
-with col[2]:
-    st.markdown('#### Top States')
 
-    st.dataframe(df_selected_year_sorted,
-                 column_order=("states", "population"),
-                 hide_index=True,
-                 width=None,
-                 column_config={
-                    "states": st.column_config.TextColumn(
-                        "States",
-                    ),
-                    "population": st.column_config.ProgressColumn(
-                        "Population",
-                        format="%f",
-                        min_value=0,
-                        max_value=max(df_selected_year_sorted.population),
-                     )}
-                 )
-    
-    with st.expander('About', expanded=True):
-        st.write('''
-            - Data: [U.S. Census Bureau](https://www.census.gov/data/datasets/time-series/demo/popest/2010s-state-total.html).
-            - :orange[**Gains/Losses**]: states with high inbound/ outbound migration for selected year
-            - :orange[**States Migration**]: percentage of states with annual inbound/ outbound migration > 50,000
-            ''')
+# Time Series Data
+time_cl1, scatter_cl2 = st.columns((2))
 
-"""
+with time_cl1:
+    filtered_df["year"] = filtered_df["date"].dt.to_period("Y")
+    st.subheader('Yearly Time Series Analysis')
+
+    linechart = pd.DataFrame(filtered_df.groupby(filtered_df["year"].dt.strftime("%Y"))["id"].count()).reset_index()
+    fig2 = px.line(linechart, x = "year", y="id", labels = {"id": "Number of earthquakes"},
+                   height=500, width = 1000,template="gridon")
+    st.plotly_chart(fig2,use_container_width=True, height = 200)
+
+with scatter_cl2:
+    # Create a scatter plot
+    st.subheader('Relationship Between Magnitude and Depth')
+    data1 = px.scatter(filtered_df, x = "mag", y = "depth")
+    st.plotly_chart(data1,use_container_width=True, height = 200)
+
+# CREATE MAPS
+
+map_cl1, map_cl2 = st.columns((2))
+
+# Create folium Map (Markers)
+# But create a new dataframe from filtered data for mag>7
+earthquake_mg_7 = filtered_df[filtered_df.mag>7]
+
+with map_cl1:
+    st.subheader("Earthquake Of Magnitude Greater Than 7")
+
+    m = folium.Map([earthquake_mg_7['latitude'].mean(), earthquake_mg_7['longitude'].mean()],
+                zoom_start=1, min_zoom = 1, max_zoom = 6)
+
+    for i in range(len(earthquake_mg_7)): # add markers for all datapoints
+        folium.Marker([earthquake_mg_7.iloc[i]['latitude'], earthquake_mg_7.iloc[i]['longitude']], popup=earthquake_mg_7.iloc[i]['country']).add_to(m)
+        
+    # call to render Folium map in Streamlit
+    st_folium(m, use_container_width=True, height = 250)
+
+
+# Creater a cluster map for mag > 5
+earthquake_mg_5 = filtered_df[filtered_df.mag>5]
+
+# Mark earthquakes epicenters with Magnitude more than 5 using CircleMarker:
+with map_cl2:
+    st.subheader('Cluster For Magnitude Greater Than 5')
+
+    mc = MarkerCluster(name="Marker Cluster")
+
+    folium_map = folium.Map([earthquake_mg_5['latitude'].mean(), earthquake_mg_5['longitude'].mean()],
+                zoom_start=1, min_zoom = 1, max_zoom = 6) 
+
+    for i in range(len(earthquake_mg_5)):
+        
+        folium.CircleMarker(location=[earthquake_mg_5.iloc[i]['latitude'], earthquake_mg_5.iloc[i]['longitude']],
+                            radius= 1.5 * earthquake_mg_5.iloc[i]['mag'],
+                            color="red",
+                            fill=True).add_to(mc)
+        
+    mc.add_to(folium_map)
+    folium.LayerControl().add_to(folium_map)
+
+    st_folium(folium_map, use_container_width=True, height = 250)
